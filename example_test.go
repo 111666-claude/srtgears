@@ -50,3 +50,22 @@ func Example_misc() {
 }
 
 func check(err error) {}
+
+// This example shows how to search a phrase in the subtitles. Search ignores
+// case, punctuation and whitespace, and phrases match across line breaks.
+func Example_search() {
+	sp, err := srtgears.ReadSrtFile("eng.srt")
+	check(err) // Check / handle error
+
+	res, err := sp.Search("may the force")
+	check(err) // Check / handle error
+
+	for _, h := range res.Hits {
+		// h.TimeIn / h.TimeOut are the subtitle's display interval,
+		// h.Start / h.End are positions in the visible text.
+		_ = h.TimeIn
+		_ = h.TimeOut
+		_ = h.Start
+		_ = h.End
+	}
+}

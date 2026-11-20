@@ -1,20 +1,20 @@
 /*
-
 Package exec is a parameter driven executor which parses the parameters and performs subtitle transformations.
 
 It is the heart of both the the srtgears command line tool and the web interface
 (the web interface produces an argument list you would provide in the command line).
-
 */
 package exec
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/icza/srtgears"
 	"io"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -39,12 +39,19 @@ type Executor struct {
 	Pos        string  // change subtitle position, one of: BL, B, BR, L, C, R, TL, T, TR  (B: bottom, T: Top, L: Left, R: Right, C: Center)
 	Color      string  // change subtitle color, name (e.g. 'red' or 'yellow') or RGB hexa '#rrggbb' (e.g.'#ff0000' for red)
 	Stats      bool    // analyze file and print statistics
+	Search     string  // search phrase in the subtitles and print the matching time intervals
+	SearchMax  int     // maximum number of search hits to print (0: default limit)
 
 	Modified bool // Flag telling if transformation was performed on loaded subtitle(s) (set by GearIt())
 
 	// Callback function to be called if stats "transformation" to be performed and no errors occurred.
 	// Stats is special because it is the only transformation that produces output to Output (and not to file).
 	BeforeStats func()
+
+	// Callback function to be called if a search is to be performed and no errors occurred.
+	// Search is special because it is the only "transformation" that produces output to Output
+	// (and not to file), in the same way as Stats.
+	BeforeSearch func()
 
 	Sp1, Sp2 *srtgears.SubsPack // SubsPacks to operate on. Must be set by the user before calling GearIt()!
 }
@@ -86,6 +93,8 @@ func (e *Executor) ProcFlags(arguments []string) error {
 	f.StringVar(&e.Pos, "pos", "", "change subtitle position, one of: BL, B, BR, L, C, R, TL, T, TR  (B: bottom, T: Top, L: Left, R: Right, C: Center)")
 	f.StringVar(&e.Color, "color", "", "change subtitle color, name (e.g. 'red' or 'yellow') or RGB hexa '#rrggbb' (e.g.'#ff0000' for red)")
 	f.BoolVar(&e.Stats, "stats", false, "analyze file and print statistics")
+	f.StringVar(&e.Search, "search", "", "search a phrase in the subtitles and print the matching time intervals")
+	f.IntVar(&e.SearchMax, "searchmax", 0, "maximum number of search hits to print, 0 means the default limit")
 
 	return f.Parse(arguments)
 }
@@ -108,6 +117,66 @@ func parseTime(t string) (time.Duration, error) {
 		return time.Duration(n)
 	}
 	return time.Hour*get(1) + time.Minute*get(2) + time.Second*get(3) + time.Millisecond*get(4), nil
+}
+
+// formatTime formats a timestamp the way SubRip does: 00:00:00,000.
+func formatTime(t time.Duration) string {
+	hour := t / time.Hour
+	min := (t % time.Hour) / time.Minute
+	sec := (t % time.Minute) / time.Second
+	ms := (t % time.Second) / time.Millisecond
+	return fmt.Sprintf("%02d:%02d:%02d,%03d", hour, min, sec, ms)
+}
+
+// runSearch searches the visible text of sp1 and prints the hits to the output.
+func (e *Executor) runSearch(sp1 *srtgears.SubsPack) error {
+	if e.BeforeSearch != nil {
+		e.BeforeSearch()
+	}
+
+	res, err := sp1.SearchLimit(e.Search, e.SearchMax)
+	if err != nil {
+		switch {
+		case errors.Is(err, srtgears.ErrEmptyQuery):
+			return fmt.Errorf("Invalid search phrase (no searchable characters): %q", e.Search)
+		case errors.Is(err, srtgears.ErrQueryTooLong):
+			return fmt.Errorf("Search phrase is too long: %q", e.Search)
+		case errors.Is(err, srtgears.ErrIndexTooLarge):
+			return fmt.Errorf("Subtitle text is too large to search: %v", err)
+		default:
+			return fmt.Errorf("Search failed: %v", err)
+		}
+	}
+
+	fmt.Fprintf(e.output, "SEARCH of %s for %q:\n", e.In, res.Query)
+	if len(res.Hits) == 0 {
+		fmt.Fprintf(e.output, "No matches found.\n")
+		return nil
+	}
+
+	for _, h := range res.Hits {
+		timeRange := formatTime(h.TimeIn) + " --> " + formatTime(h.TimeOut)
+		if h.InvalidTime {
+			timeRange += " (invalid time)"
+		}
+		line := "?"
+		if h.Subtitle != nil && h.Start.Line < len(h.Subtitle.Lines) {
+			line = strconv.Itoa(h.Start.Line + 1)
+		}
+		fmt.Fprintf(e.output, "#%d %s (line %s, rune %d): %s\n",
+			h.SubIndex+1, timeRange, line, h.Start.RuneOffset+1, visibleForOutput(h))
+	}
+	if res.Truncated {
+		fmt.Fprintf(e.output, "Results truncated; only the first %d matches are shown.\n", len(res.Hits))
+	}
+
+	return nil
+}
+
+// visibleForOutput returns the matched text on a single line, suitable for a
+// plain text report.
+func visibleForOutput(h srtgears.SearchHit) string {
+	return strings.ReplaceAll(h.MatchedText(), "\n", " / ")
 }
 
 // Mapping between positions expected in arguments to our model Pos.
@@ -197,6 +266,15 @@ func (e *Executor) GearIt() (err error) {
 		e.Modified = true
 	}
 
+	// Search before stats: stats is destructive (it strips formatting and
+	// hearing impaired lines), while search should report the visible text of
+	// the transformed subtitles.
+	if e.Search != "" {
+		if err := e.runSearch(sp1); err != nil {
+			return err
+		}
+	}
+
 	if e.Stats {
 		if e.BeforeStats != nil {
 			e.BeforeStats()
@@ -223,7 +301,9 @@ func (e *Executor) GearIt() (err error) {
 		p("Subs with hearing impaired", ss.HIs)
 	}
 
-	if !e.Stats && e.Modified {
+	// Search and stats are analysis modes: they print their result to the
+	// output instead of files, so no output file is required for them.
+	if !e.Stats && e.Search == "" && e.Modified {
 		// If there were modifications but no output file is specified, treat that as an error:
 		if e.Out == "" {
 			return fmt.Errorf("Output file must be specified ('-out')!")

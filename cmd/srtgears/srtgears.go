@@ -1,7 +1,5 @@
 /*
-
 This is the main package of the Srtgears command line tool.
-
 */
 package main
 
@@ -21,6 +19,11 @@ var Version = "dev"
 var e = exec.New(os.Stdout)
 
 func main() {
+	os.Exit(run())
+}
+
+// run performs the command line processing and returns the process exit code.
+func run() int {
 	fmt.Printf("Srtgears %s, home page: %s\n", Version, srtgears.HomePage)
 
 	e.FlagSet.Usage = func() {
@@ -30,7 +33,7 @@ func main() {
 	}
 
 	if err := e.ProcFlags(os.Args[1:]); err != nil {
-		return
+		return 1
 	}
 
 	if len(os.Args) < 2 { // 0 arguments, print usage
@@ -39,22 +42,25 @@ func main() {
 
 	if err := readFiles(); err != nil {
 		fmt.Println(err)
-		return
+		return 1
 	}
 
 	if err := e.GearIt(); err != nil {
 		fmt.Println(err)
-		return
+		return 1
 	}
 
 	if e.Stats {
-		return // Stats modifies the subtitles, omit writing to files.
+		return 0 // Stats modifies the subtitles, omit writing to files.
 	}
+	// Search only analyzes the subtitles, so writing is still allowed (and is
+	// skipped automatically if no output file was specified).
 
 	if err := writeFiles(); err != nil {
 		fmt.Println(err)
-		return
+		return 1
 	}
+	return 0
 }
 
 // readFiles loads the subtitle files specified by the '-in' and '-in2' flags.
@@ -109,4 +115,8 @@ Concatenate 2 files where 2nd part of the movie starts at 51 min 15 sec:
 Change subtitle color to yellow, move to top, remove HI lines, increase display duration by 10% and save as *.ssa:
     srtgears -in eng.srt -out eng2.ssa -color=yellow -pos=T -removehi -lengthen=1.1
 Repair: do nothing, just parse and re-save
-    srtgears -in eng.srt -out eng2.srt`
+    srtgears -in eng.srt -out eng2.srt
+Find a phrase and print its time intervals and match positions:
+    srtgears -in eng.srt -search="the force will be with you"
+Search after a transformation (timestamps printed are transformed ones):
+    srtgears -in eng.srt -shiftBy=1500 -search="may the force"`

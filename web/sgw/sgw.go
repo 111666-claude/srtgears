@@ -1,12 +1,11 @@
+//go:build appengine
 // +build appengine
 
 /*
-
 Package sgw is the backend logic for the online Srtgears.
 
 It processes form submit requests, and connects the data to the srtgears engine,
 and sends back the result.
-
 */
 package sgw
 
@@ -82,14 +81,18 @@ func sgwHandler(w http.ResponseWriter, r *http.Request) {
 	e.BeforeStats = func() {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	}
+	// ...and so is the search report.
+	e.BeforeSearch = func() {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	}
 	// Perform transformations
 	if err := e.GearIt(); err != nil {
 		fmt.Fprint(w, err)
 		return
 	}
 
-	if e.Stats {
-		return // If stats was specified, response is already committed.
+	if e.Stats || e.Search != "" {
+		return // If stats or search was specified, response is already committed.
 	}
 
 	// Everything went ok. We can now generate and send the transformed subtitles.
@@ -213,6 +216,12 @@ func rewindForm(args []string, r *http.Request) []string {
 	}
 	if s := r.FormValue("stats"); s != "" {
 		args = append(args, "-stats")
+	}
+	if s := r.FormValue("search"); s != "" {
+		args = append(args, "-search="+s)
+	}
+	if s := r.FormValue("searchmax"); s != "" {
+		args = append(args, "-searchmax="+s)
 	}
 
 	return args

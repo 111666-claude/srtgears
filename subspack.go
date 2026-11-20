@@ -17,6 +17,12 @@ import (
 // a collection of Subtitles and other meta info.
 type SubsPack struct {
 	Subs []*Subtitle
+
+	// Cached search index and its revision. They are not part of the model:
+	// modifying Subs directly leaves them untouched, which is why
+	// InvalidateSearchIndex exists. See search.go.
+	searchRev   uint64
+	searchIndex *SearchIndex
 }
 
 // SortSubtitles is a type that implements sorting
@@ -29,6 +35,7 @@ func (s SortSubtitles) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 // Sort sorts the subtitles by appearance timestamp.
 func (sp *SubsPack) Sort() {
 	sort.Sort(SortSubtitles(sp.Subs))
+	sp.InvalidateSearchIndex() // Hit order / subtitle indexes changed.
 }
 
 // Shift shifts all subtitles with the specified delta.
@@ -63,6 +70,7 @@ func (sp *SubsPack) SetColor(color string) {
 // RemoveHI removes hearing impaired lines from subtitles
 // (such as "[PHONE RINGING]" or "(phone ringing)").
 func (sp *SubsPack) RemoveHI() {
+	defer sp.InvalidateSearchIndex() // Visible text changed.
 	for i := len(sp.Subs) - 1; i >= 0; i-- {
 		s := sp.Subs[i]
 		s.RemoveHI()
@@ -89,7 +97,7 @@ func (sp *SubsPack) Concatenate(sp2 *SubsPack, secPartStart time.Duration) {
 	// There might be overlapping between the 2 parts
 	// (e.g. 2nd part repeats the last minute of the first part),
 	// so just to be well-behaved:
-	sp.Sort()
+	sp.Sort() // Also invalidates the search index.
 }
 
 // Merge merges another SubsPack into this to create a "dual subtitle".
@@ -107,7 +115,7 @@ func (sp *SubsPack) Merge(sp2 *SubsPack) {
 	sp.Subs = append(sp.Subs, sp2.Subs...)
 
 	// And sort
-	sp.Sort()
+	sp.Sort() // Also invalidates the search index.
 }
 
 // Split splits this SubsPack into 2 at the specified time.
@@ -117,6 +125,7 @@ func (sp *SubsPack) Merge(sp2 *SubsPack) {
 // Useful to create 2 subtitles if movie is present in 2 parts but subtitle is for one.
 func (sp *SubsPack) Split(at time.Duration) (sp2 *SubsPack) {
 	sp2 = &SubsPack{}
+	defer sp.InvalidateSearchIndex() // This pack lost subtitles.
 
 	subs := sp.Subs
 	idx := sort.Search(len(subs), func(i int) bool {
@@ -135,6 +144,7 @@ func (sp *SubsPack) Split(at time.Duration) (sp2 *SubsPack) {
 
 // RemoveHTML removes HTML formatting from all subtitles.
 func (sp *SubsPack) RemoveHTML() {
+	defer sp.InvalidateSearchIndex() // Visible text changed.
 	for _, s := range sp.Subs {
 		s.RemoveHTML()
 	}
@@ -142,6 +152,7 @@ func (sp *SubsPack) RemoveHTML() {
 
 // RemoveControl removes controls such as {\anX} (or {\aY}), {\pos(x,y)} from all subtitles.
 func (sp *SubsPack) RemoveControl() {
+	defer sp.InvalidateSearchIndex() // Visible text changed.
 	for _, s := range sp.Subs {
 		s.RemoveControl()
 	}

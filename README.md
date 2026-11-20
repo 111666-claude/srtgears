@@ -13,6 +13,7 @@ Srtgears provides some very handy features which are not available in other subt
 - remove hearing impaired (HI) texts (such as `"[PHONE RINGING]"` or `"(phone ringing)"`)
 - strip off formatting (such as `&lt;i&gt;`, `&lt;b&gt;`, `&lt;u&gt;`, `&lt;font&gt;`)
 - split the subtitle file at a specified time
+- search a phrase in the subtitles and get the matching time intervals and text positions (case, punctuation and whitespace are normalized; a phrase also matches across line breaks)
 - statistics from the subtitles
 - etc...
 
